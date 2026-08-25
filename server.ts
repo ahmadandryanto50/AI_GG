@@ -193,7 +193,7 @@ async function startServer() {
     const finalStatus = (!isProd && email === "ahmad.andryanto50@admin.smp.belajar.id") ? "allowed" : null;
 
     if (!db.users[email]) {
-      const defaultStatus = isProd ? 'pending' : 'allowed';
+      const defaultStatus = 'allowed';
       db.users[email] = { 
         status: finalStatus || defaultStatus, 
         name: displayName || email.split('@')[0], 
