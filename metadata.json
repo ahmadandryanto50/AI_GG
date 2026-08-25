@@ -1,0 +1,8 @@
+{
+  "name": "AppScript Generator Prototype",
+  "description": "A UI prototype for an AppScript generator tool with dark mode, side-by-side code and preview workspace, and deployment simulation.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
