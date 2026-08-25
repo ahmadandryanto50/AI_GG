@@ -13,7 +13,10 @@ import {
   Save, 
   LockOpen,
   UserCheck,
-  UserX
+  UserX,
+  FileSpreadsheet,
+  Copy,
+  ExternalLink
 } from 'lucide-react';
 import { db, auth } from '../lib/auth';
 import { onAuthStateChanged } from 'firebase/auth';
@@ -60,11 +63,108 @@ const getInitialUsersList = (): Record<string, UserLog> => {
   }
 };
 
+const GOOGLE_APPS_SCRIPT_CODE = `// ==========================================
+// KODE GOOGLE APPS SCRIPT (Code.gs)
+// DATABASE TERSIMPAN DI GOOGLE SPREADSHEET
+// ==========================================
+
+function doGet(e) {
+  var action = e.parameter ? e.parameter.action : "";
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName("Pengguna");
+  if (!sheet) {
+    sheet = ss.insertSheet("Pengguna");
+    sheet.appendRow(["Email", "Nama", "Status", "First Login", "Last Login"]);
+    sheet.getRange("1:1").setFontWeight("bold").setBackground("#115e59").setFontColor("#ffffff");
+  }
+
+  if (action === "getUsers") {
+    var data = sheet.getDataRange().getValues();
+    var users = {};
+    for (var i = 1; i < data.length; i++) {
+      var email = String(data[i][0]).toLowerCase();
+      if (email) {
+        users[email] = {
+          name: data[i][1],
+          status: data[i][2],
+          firstLogin: data[i][3],
+          lastLogin: data[i][4]
+        };
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({ success: true, users: users }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({ success: true, message: "Google Apps Script Server Active" }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function doPost(e) {
+  try {
+    var contents = JSON.parse(e.postData.contents || "{}");
+    var action = contents.action || (e.parameter ? e.parameter.action : "");
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Pengguna");
+    if (!sheet) {
+      sheet = ss.insertSheet("Pengguna");
+      sheet.appendRow(["Email", "Nama", "Status", "First Login", "Last Login"]);
+      sheet.getRange("1:1").setFontWeight("bold").setBackground("#115e59").setFontColor("#ffffff");
+    }
+
+    if (action === "logUser") {
+      var email = String(contents.email || "").toLowerCase();
+      var name = contents.name || email.split('@')[0];
+      var status = contents.status || "pending";
+      var now = new Date().toISOString();
+
+      var data = sheet.getDataRange().getValues();
+      var rowIndex = -1;
+      for (var i = 1; i < data.length; i++) {
+        if (String(data[i][0]).toLowerCase() === email) {
+          rowIndex = i + 1;
+          break;
+        }
+      }
+
+      if (rowIndex > 0) {
+        sheet.getRange(rowIndex, 3).setValue(status);
+        sheet.getRange(rowIndex, 5).setValue(now);
+      } else {
+        sheet.appendRow([email, name, status, now, now]);
+      }
+      return ContentService.createTextOutput(JSON.stringify({ success: true, status: status }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    if (action === "updateStatus") {
+      var email = String(contents.email || "").toLowerCase();
+      var status = contents.status;
+      var data = sheet.getDataRange().getValues();
+      var rowIndex = -1;
+      for (var i = 1; i < data.length; i++) {
+        if (String(data[i][0]).toLowerCase() === email) {
+          rowIndex = i + 1;
+          break;
+        }
+      }
+      if (rowIndex > 0) {
+        sheet.getRange(rowIndex, 3).setValue(status);
+      }
+      return ContentService.createTextOutput(JSON.stringify({ success: true }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ success: false, error: err.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}`;
+
 export default function SettingsView({ onBack, onUpdateConfig }: SettingsViewProps) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
-  const [activeTab, setActiveTab] = useState<'users' | 'appearance' | 'security'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'appearance' | 'security' | 'spreadsheet'>('users');
   
   // Tab users state initialized with persistent admin data
   const [users, setUsers] = useState<Record<string, UserLog>>(getInitialUsersList);
@@ -82,6 +182,12 @@ export default function SettingsView({ onBack, onUpdateConfig }: SettingsViewPro
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
   const [secMessage, setSecMessage] = useState<{ text: string; type: 'success' | 'error' }>({ text: '', type: 'success' });
+
+  // Tab spreadsheet state
+  const [gsWebAppUrl, setGsWebAppUrl] = useState(() => localStorage.getItem('cfg_gs_web_app_url') || '');
+  const [copiedGs, setCopiedGs] = useState(false);
+  const [testingGs, setTestingGs] = useState(false);
+  const [gsStatusMsg, setGsStatusMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   // Notification states and logic
   const [showNotification, setShowNotification] = useState(false);
@@ -276,6 +382,17 @@ export default function SettingsView({ onBack, onUpdateConfig }: SettingsViewPro
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status })
       }).catch(() => {});
+
+      // 3. Also sync to Google Spreadsheet if Web App URL is configured
+      const savedGsUrl = localStorage.getItem('cfg_gs_web_app_url');
+      if (savedGsUrl) {
+        fetch(savedGsUrl, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'updateStatus', email: emailLower, status })
+        }).catch(() => {});
+      }
       
     } catch (err) {
       console.error("Gagal memperbarui status via Firestore, mencoba backend/local storage...", err);
@@ -364,6 +481,35 @@ export default function SettingsView({ onBack, onUpdateConfig }: SettingsViewPro
       } else {
         setSecMessage({ text: 'Password lama salah (Offline Mode)', type: 'error' });
       }
+    }
+  };
+
+  const handleCopyGsCode = () => {
+    navigator.clipboard.writeText(GOOGLE_APPS_SCRIPT_CODE);
+    setCopiedGs(true);
+    setTimeout(() => setCopiedGs(false), 3000);
+  };
+
+  const handleSaveGsUrl = async () => {
+    setTestingGs(true);
+    setGsStatusMsg(null);
+    const cleanedUrl = gsWebAppUrl.trim();
+    localStorage.setItem('cfg_gs_web_app_url', cleanedUrl);
+
+    if (!cleanedUrl) {
+      setGsStatusMsg({ text: 'URL berhasil dihapus. Integrasi Google Spreadsheet dinonaktifkan.', type: 'success' });
+      setTestingGs(false);
+      return;
+    }
+
+    try {
+      const testUrl = cleanedUrl + (cleanedUrl.includes('?') ? '&' : '?') + 'action=getUsers';
+      await fetch(testUrl, { mode: 'no-cors' });
+      setGsStatusMsg({ text: 'Tersambung! URL Google Apps Script Web App berhasil disimpan & terhubung dengan Spreadsheet.', type: 'success' });
+    } catch (e) {
+      setGsStatusMsg({ text: 'URL telah disimpan. Pastikan akses Web App Google Apps Script disetel ke "Anyone / Siapa Saja".', type: 'error' });
+    } finally {
+      setTestingGs(false);
     }
   };
 
@@ -484,6 +630,18 @@ export default function SettingsView({ onBack, onUpdateConfig }: SettingsViewPro
           >
             <Key className="w-4 h-4" />
             Keamanan Admin
+          </button>
+
+          <button 
+            onClick={() => setActiveTab('spreadsheet')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-colors ${
+              activeTab === 'spreadsheet' 
+                ? 'bg-orange-500/10 text-orange-400 border border-orange-500/20' 
+                : 'text-gray-400 hover:bg-[#1e1e1e] hover:text-white'
+            }`}
+          >
+            <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+            Database Spreadsheet (Code.gs)
           </button>
         </div>
 
@@ -730,6 +888,102 @@ export default function SettingsView({ onBack, onUpdateConfig }: SettingsViewPro
                   </button>
                 </div>
               </form>
+            </div>
+          )}
+
+          {activeTab === 'spreadsheet' && (
+            <div className="space-y-6 max-w-4xl">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <FileSpreadsheet className="w-6 h-6 text-emerald-400" />
+                  <h2 className="text-xl font-bold text-white">Database Google Spreadsheet (Google Apps Script)</h2>
+                </div>
+                <p className="text-sm text-gray-400">Hubungkan aplikasi ini secara langsung ke Google Spreadsheet untuk menyimpan log pengguna, waktu login, dan hak akses otorisasi dalam tabel Spreadsheet real-time.</p>
+              </div>
+
+              {/* Step by Step Guide Card */}
+              <div className="bg-[#141414] border border-[#2d2d2d] rounded-2xl p-6 space-y-3 shadow-xl">
+                <h3 className="text-sm font-bold text-emerald-400 flex items-center gap-2 uppercase tracking-wide">
+                  <span className="w-6 h-6 rounded-full bg-emerald-500/10 flex items-center justify-center text-xs">1</span>
+                  Panduan Pemasangan Google Apps Script (Code.gs)
+                </h3>
+                <ol className="text-xs text-gray-300 space-y-2 list-decimal list-inside pl-1 leading-relaxed">
+                  <li>Buka <a href="https://sheets.new" target="_blank" rel="noopener noreferrer" className="text-emerald-400 underline font-semibold inline-flex items-center gap-1">Google Spreadsheet Baru <ExternalLink className="w-3 h-3" /></a> di browser Anda.</li>
+                  <li>Di menu Spreadsheet, klik <b>Ekstensi</b> &rarr; <b>Apps Script</b>.</li>
+                  <li>Hapus semua isi kode bawaan di file <code className="bg-[#222] px-1.5 py-0.5 rounded text-orange-300">Code.gs</code>.</li>
+                  <li>Tekan tombol <b>"Salin Kode Apps Script"</b> di bawah ini, lalu <b>Paste (Tempel)</b> ke dalam Apps Script.</li>
+                  <li>Klik tombol <b>Deploy (Terapkan)</b> &rarr; <b>New Deployment (Pengujian Baru)</b> &rarr; Pilih jenis <b>Web App</b>.</li>
+                  <li>Atur <b>Who has access (Siapa yang memiliki akses)</b> menjadi <b>Anyone (Siapa Saja)</b>.</li>
+                  <li>Klik <b>Deploy</b>, lalu salin <b>Web App URL</b> dan tempelkan pada kolom di bawah.</li>
+                </ol>
+              </div>
+
+              {/* Code block card */}
+              <div className="bg-[#141414] border border-[#2d2d2d] rounded-2xl overflow-hidden shadow-xl">
+                <div className="bg-[#1e1e1e] px-4 py-3 border-b border-[#2d2d2d] flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-xs font-mono font-bold text-emerald-400">
+                    <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                    Code.gs (Google Apps Script)
+                  </div>
+                  <button
+                    onClick={handleCopyGsCode}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium transition-colors shadow"
+                  >
+                    {copiedGs ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copiedGs ? 'Kode Tersalin!' : 'Salin Kode Apps Script (Code.gs)'}
+                  </button>
+                </div>
+                <div className="p-4 bg-[#0a0a0a]">
+                  <textarea
+                    readOnly
+                    value={GOOGLE_APPS_SCRIPT_CODE}
+                    rows={12}
+                    className="w-full bg-transparent text-emerald-300 font-mono text-xs focus:outline-none resize-y leading-relaxed"
+                  />
+                </div>
+              </div>
+
+              {/* Web App URL Form Card */}
+              <div className="bg-[#141414] border border-[#2d2d2d] rounded-2xl p-6 space-y-4 shadow-xl">
+                <h3 className="text-sm font-bold text-white flex items-center gap-2 uppercase tracking-wide">
+                  <span className="w-6 h-6 rounded-full bg-orange-500/10 flex items-center justify-center text-xs text-orange-400">2</span>
+                  Sambungkan URL Web App Google Apps Script
+                </h3>
+                
+                <div>
+                  <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Google Apps Script Web App URL</label>
+                  <input
+                    type="url"
+                    value={gsWebAppUrl}
+                    onChange={(e) => setGsWebAppUrl(e.target.value)}
+                    placeholder="https://script.google.com/macros/s/.../exec"
+                    className="w-full bg-[#222] border border-[#333] rounded-xl px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-emerald-500 text-sm font-mono transition-colors"
+                  />
+                  <p className="text-[#888] text-xs mt-1.5">Contoh URL: https://script.google.com/macros/s/AKfycb.../exec</p>
+                </div>
+
+                {gsStatusMsg && (
+                  <div className={`p-3 rounded-xl border text-xs flex items-center gap-2 ${
+                    gsStatusMsg.type === 'success' 
+                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' 
+                      : 'bg-red-500/10 border-red-500/30 text-red-400'
+                  }`}>
+                    {gsStatusMsg.type === 'success' ? <Check className="w-4 h-4 shrink-0" /> : <ShieldAlert className="w-4 h-4 shrink-0" />}
+                    {gsStatusMsg.text}
+                  </div>
+                )}
+
+                <div className="pt-2 flex justify-end">
+                  <button
+                    onClick={handleSaveGsUrl}
+                    disabled={testingGs}
+                    className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-2 shadow-lg"
+                  >
+                    {testingGs ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                    {testingGs ? 'Menyimpan & Menguji...' : 'Simpan & Hubungkan Spreadsheet'}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>

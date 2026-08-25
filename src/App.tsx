@@ -154,6 +154,22 @@ export default function App() {
             displayName: user.displayName || user.email.split('@')[0] 
           })
         }).catch(() => {});
+
+        // Also sync user log to Google Spreadsheet if configured
+        const savedGsUrl = localStorage.getItem('cfg_gs_web_app_url');
+        if (savedGsUrl) {
+          fetch(savedGsUrl, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'logUser',
+              email: emailLower,
+              name: user.displayName || emailLower.split('@')[0],
+              status: emailLower === "ahmad.andryanto50@admin.smp.belajar.id" ? "allowed" : "pending"
+            })
+          }).catch(() => {});
+        }
         
       } catch (err) {
         console.log("Informasi koneksi Firestore (offline fallback diaktifkan):", err);
