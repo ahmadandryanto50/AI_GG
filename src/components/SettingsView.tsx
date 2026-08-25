@@ -15,7 +15,8 @@ import {
   UserCheck,
   UserX
 } from 'lucide-react';
-import { db } from '../lib/auth';
+import { db, auth } from '../lib/auth';
+import { onAuthStateChanged } from 'firebase/auth';
 import { collection, doc, getDoc, updateDoc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 
 interface UserLog {
@@ -127,7 +128,7 @@ export default function SettingsView({ onBack, onUpdateConfig }: SettingsViewPro
     }, 5000);
   };
 
-  // Load current dynamic theme config and users
+  // Load current dynamic theme config and check Super Admin auth
   useEffect(() => {
     // Get local config if any
     const savedTitle = localStorage.getItem('cfg_app_title') || 'AI_GG';
@@ -137,6 +138,19 @@ export default function SettingsView({ onBack, onUpdateConfig }: SettingsViewPro
     setAppTitle(savedTitle);
     setWelcomeText(savedWelcome);
     setThemeColor(savedColor);
+
+    // Auto authenticate if logged in as Super Admin via Google Auth
+    const unsubAuth = onAuthStateChanged(auth, (currentUser) => {
+      if (currentUser?.email?.toLowerCase() === SUPER_ADMIN_EMAIL) {
+        setIsAuthenticated(true);
+      }
+    });
+
+    if (auth.currentUser?.email?.toLowerCase() === SUPER_ADMIN_EMAIL) {
+      setIsAuthenticated(true);
+    }
+
+    return () => unsubAuth();
   }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
