@@ -347,39 +347,68 @@ export default function App() {
               Keluar Sesi
             </button>
             <button 
-              onClick={() => {
-                setUserStatus('checking');
+              onClick={async () => {
                 if (user && user.email) {
-                  fetch('/api/settings/log-user', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                      email: user.email, 
-                      displayName: user.displayName || user.email.split('@')[0] 
-                    })
-                  })
-                  .then(res => res.json())
-                  .then(data => {
-                    if (data.success) {
-                      setUserStatus(data.status);
+                  setUserStatus('checking');
+                  const emailLower = user.email.toLowerCase();
+                  
+                  try {
+                    // Try Firestore database first (synchronized across all devices/browsers in real time)
+                    const userDocRef = doc(db, 'users', emailLower);
+                    const userDoc = await getDoc(userDocRef);
+                    const isAdmin = emailLower === "ahmad.andryanto50@admin.smp.belajar.id";
+                    
+                    if (userDoc.exists()) {
+                      const data = userDoc.data();
+                      const liveStatus = data.status || (isAdmin ? 'allowed' : 'pending');
+                      setUserStatus(liveStatus);
                     } else {
-                      setUserStatus('pending');
+                      // Document doesn't exist, create it as pending (or allowed if Super Admin)
+                      const defaultStatus = isAdmin ? 'allowed' : 'pending';
+                      const newUserPayload = {
+                        name: user.displayName || user.email.split('@')[0],
+                        status: defaultStatus,
+                        firstLogin: new Date().toISOString(),
+                        lastLogin: new Date().toISOString()
+                      };
+                      await setDoc(userDocRef, newUserPayload);
+                      setUserStatus(defaultStatus);
                     }
-                  })
-                  .catch(() => {
-                    // Offline / Vercel Fallback
-                    const isClientAdmin = user.email === "ahmad.andryanto50@admin.smp.belajar.id";
+                  } catch (err) {
+                    console.error("Gagal memeriksa hak akses user via Firestore, mencoba backend/local storage...", err);
+                    
+                    // Fallback to Express API
+                    try {
+                      const response = await fetch('/api/settings/log-user', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                          email: emailLower, 
+                          displayName: user.displayName || user.email.split('@')[0] 
+                        })
+                      });
+                      const data = await response.json();
+                      if (data.success) {
+                        setUserStatus(data.status || 'pending');
+                        return;
+                      }
+                    } catch (apiErr) {
+                      console.error("Gagal memeriksa via API:", apiErr);
+                    }
+                    
+                    // Final fallback: Local storage (Offline / Client-only)
+                    const isClientAdmin = emailLower === "ahmad.andryanto50@admin.smp.belajar.id";
                     if (isClientAdmin) {
                       setUserStatus('allowed');
                     } else {
                       const localUsersList = JSON.parse(localStorage.getItem('cfg_users_list') || '{}');
-                      if (localUsersList[user.email]) {
-                        setUserStatus(localUsersList[user.email].status);
+                      if (localUsersList[emailLower]) {
+                        setUserStatus(localUsersList[emailLower].status);
                       } else {
                         setUserStatus('pending');
                       }
                     }
-                  });
+                  }
                 }
               }}
               className="flex-1 py-3 bg-amber-600 hover:bg-amber-500 rounded-xl text-sm font-medium text-white transition-all shadow-lg shadow-amber-600/10"
