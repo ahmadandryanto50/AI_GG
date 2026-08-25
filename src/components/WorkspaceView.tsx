@@ -157,9 +157,10 @@ interface WorkspaceViewProps {
   onUpdateProject: (project: Project) => void;
   token: string | null;
   isRejected?: boolean;
+  userStatus?: string;
 }
 
-export default function WorkspaceView({ onBack, project, onUpdateProject, token, isRejected = false }: WorkspaceViewProps) {
+export default function WorkspaceView({ onBack, project, onUpdateProject, token, isRejected = false, userStatus = 'allowed' }: WorkspaceViewProps) {
   const [activeFile, setActiveFile] = useState<string>('index.html');
   const [viewMode, setViewMode] = useState<'preview' | 'code'>('preview');
   const [previewScreen, setPreviewScreen] = useState<'desktop' | 'mobile'>('desktop');
@@ -388,10 +389,17 @@ export default function WorkspaceView({ onBack, project, onUpdateProject, token,
         {/* Chat Input Area */}
         <div className="absolute bottom-16 md:bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-[#141414] via-[#141414] to-transparent space-y-2 z-20">
           {isRejected && (
-            <div className="flex items-center gap-2 p-3 rounded-xl bg-red-950/40 border border-red-800/50 text-red-400 text-xs">
-              <ShieldAlert className="w-4 h-4 text-red-500 shrink-0" />
-              <span>Akses Ditolak: Anda hanya bisa melihat tampilan ini. Hubungi admin untuk akses penuh.</span>
-            </div>
+            userStatus === 'pending' ? (
+              <div className="flex items-center gap-2 p-3 rounded-xl bg-amber-950/40 border border-amber-800/50 text-amber-400 text-xs shadow-lg">
+                <ShieldAlert className="w-4 h-4 text-amber-500 shrink-0 animate-pulse" />
+                <span>Menunggu Persetujuan: Hubungi Super Admin Anda untuk mengaktifkan fitur edit kode.</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 p-3 rounded-xl bg-red-950/40 border border-red-800/50 text-red-400 text-xs shadow-lg">
+                <ShieldAlert className="w-4 h-4 text-red-500 shrink-0" />
+                <span>Akses Ditolak: Anda hanya bisa melihat tampilan ini. Hubungi admin untuk akses penuh.</span>
+              </div>
+            )
           )}
           <div 
             className="bg-[#1e1e1e] border rounded-2xl p-2 flex items-center transition-colors shadow-lg"

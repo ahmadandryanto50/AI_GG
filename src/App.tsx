@@ -104,6 +104,7 @@ export default function App() {
         }
         
         setUserStatus(finalStatus);
+        localStorage.setItem(`appscript_user_status_${emailLower}`, finalStatus);
         
         // If allowed, fetch projects from Firestore in the background
         if (finalStatus === 'allowed') {
@@ -145,7 +146,15 @@ export default function App() {
         }).catch(() => {});
         
       } catch (err) {
-        console.error("Gagal memeriksa hak akses user via Firestore, mencoba backend/local storage...", err);
+        console.log("Informasi koneksi Firestore (offline fallback diaktifkan):", err);
+        
+        // Cache Check First: If previously allowed/pending/rejected, use that status instantly when offline
+        const cachedStatus = localStorage.getItem(`appscript_user_status_${emailLower}`);
+        if (cachedStatus === 'allowed' || cachedStatus === 'pending' || cachedStatus === 'rejected') {
+          console.log(`Menggunakan cache status lokal: ${cachedStatus}`);
+          setUserStatus(cachedStatus as any);
+          return;
+        }
         
         // Fallback to Server API if Firestore fails
         try {
@@ -161,6 +170,7 @@ export default function App() {
           if (data.success) {
             const currentStatus = data.status || 'pending';
             setUserStatus(currentStatus);
+            localStorage.setItem(`appscript_user_status_${emailLower}`, currentStatus);
             return;
           }
         } catch (apiErr) {
@@ -171,10 +181,13 @@ export default function App() {
         const isClientAdmin = emailLower === "ahmad.andryanto50@admin.smp.belajar.id";
         if (isClientAdmin) {
           setUserStatus('allowed');
+          localStorage.setItem(`appscript_user_status_${emailLower}`, 'allowed');
         } else {
           const localUsersList = JSON.parse(localStorage.getItem('cfg_users_list') || '{}');
           if (localUsersList[emailLower]) {
-            setUserStatus(localUsersList[emailLower].status);
+            const currentStatus = localUsersList[emailLower].status;
+            setUserStatus(currentStatus);
+            localStorage.setItem(`appscript_user_status_${emailLower}`, currentStatus);
           } else {
             localUsersList[emailLower] = {
               name: user.displayName || user.email.split('@')[0],
@@ -183,6 +196,7 @@ export default function App() {
             };
             localStorage.setItem('cfg_users_list', JSON.stringify(localUsersList));
             setUserStatus('pending');
+            localStorage.setItem(`appscript_user_status_${emailLower}`, 'pending');
           }
         }
       }
@@ -305,122 +319,6 @@ export default function App() {
     );
   }
 
-  if (userStatus === 'pending' || userStatus === 'rejected') {
-    return (
-      <div className="min-h-screen bg-[#111] flex flex-col items-center justify-center text-white p-4">
-        <div className="max-w-md w-full bg-[#181818] border border-[#2d2d2d] rounded-2xl p-8 shadow-2xl text-center space-y-6">
-          <div className="w-16 h-16 bg-amber-500/10 text-amber-500 rounded-full flex items-center justify-center mx-auto animate-pulse">
-            <ShieldAlert className="w-8 h-8" />
-          </div>
-          
-          <div className="space-y-2">
-            <h2 className="text-2xl font-bold">Akses Memerlukan Otorisasi</h2>
-            <p className="text-sm text-gray-400">
-              Aplikasi ini berada dalam mode publik aman. Hanya pengguna dengan otorisasi resmi yang dapat mengakses sistem ini.
-            </p>
-          </div>
-
-          <div className="bg-[#222] border border-[#333] rounded-xl p-4 text-left space-y-3">
-            <div>
-              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Email Masuk</label>
-              <div className="text-sm font-semibold text-white break-all">{user?.email}</div>
-            </div>
-            
-            <div>
-              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Status Akun</label>
-              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/20 mt-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
-                {userStatus === 'pending' ? 'Menunggu Aktivasi Admin' : 'Akses Ditangguhkan / Ditolak'}
-              </div>
-            </div>
-          </div>
-
-          <div className="text-xs text-gray-500 leading-relaxed">
-            Permintaan akses telah dikirimkan secara otomatis. Silakan hubungi Super Admin untuk menyetujui akun Anda melalui tab <strong>Dashboard Pengaturan Admin</strong>.
-          </div>
-
-          <div className="flex gap-3">
-            <button 
-              onClick={handleLogout}
-              className="flex-1 py-3 bg-[#222] hover:bg-[#2d2d2d] border border-[#333] rounded-xl text-sm font-medium text-gray-300 transition-all"
-            >
-              Keluar Sesi
-            </button>
-            <button 
-              onClick={async () => {
-                if (user && user.email) {
-                  setUserStatus('checking');
-                  const emailLower = user.email.toLowerCase();
-                  
-                  try {
-                    // Try Firestore database first (synchronized across all devices/browsers in real time)
-                    const userDocRef = doc(db, 'users', emailLower);
-                    const userDoc = await getDoc(userDocRef);
-                    const isAdmin = emailLower === "ahmad.andryanto50@admin.smp.belajar.id";
-                    
-                    if (userDoc.exists()) {
-                      const data = userDoc.data();
-                      const liveStatus = data.status || (isAdmin ? 'allowed' : 'pending');
-                      setUserStatus(liveStatus);
-                    } else {
-                      // Document doesn't exist, create it as pending (or allowed if Super Admin)
-                      const defaultStatus = isAdmin ? 'allowed' : 'pending';
-                      const newUserPayload = {
-                        name: user.displayName || user.email.split('@')[0],
-                        status: defaultStatus,
-                        firstLogin: new Date().toISOString(),
-                        lastLogin: new Date().toISOString()
-                      };
-                      await setDoc(userDocRef, newUserPayload);
-                      setUserStatus(defaultStatus);
-                    }
-                  } catch (err) {
-                    console.error("Gagal memeriksa hak akses user via Firestore, mencoba backend/local storage...", err);
-                    
-                    // Fallback to Express API
-                    try {
-                      const response = await fetch('/api/settings/log-user', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ 
-                          email: emailLower, 
-                          displayName: user.displayName || user.email.split('@')[0] 
-                        })
-                      });
-                      const data = await response.json();
-                      if (data.success) {
-                        setUserStatus(data.status || 'pending');
-                        return;
-                      }
-                    } catch (apiErr) {
-                      console.error("Gagal memeriksa via API:", apiErr);
-                    }
-                    
-                    // Final fallback: Local storage (Offline / Client-only)
-                    const isClientAdmin = emailLower === "ahmad.andryanto50@admin.smp.belajar.id";
-                    if (isClientAdmin) {
-                      setUserStatus('allowed');
-                    } else {
-                      const localUsersList = JSON.parse(localStorage.getItem('cfg_users_list') || '{}');
-                      if (localUsersList[emailLower]) {
-                        setUserStatus(localUsersList[emailLower].status);
-                      } else {
-                        setUserStatus('pending');
-                      }
-                    }
-                  }
-                }
-              }}
-              className="flex-1 py-3 bg-amber-600 hover:bg-amber-500 rounded-xl text-sm font-medium text-white transition-all shadow-lg shadow-amber-600/10"
-            >
-              Cek Status Baru
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-  
   const currentProject = projects.find(p => p.id === currentProjectId);
 
   return (
@@ -435,9 +333,10 @@ export default function App() {
           onHome={() => { setAppState('home'); setSidebarOpen(false); }}
           onSettings={() => { setAppState('settings'); setSidebarOpen(false); }}
           appTitle={appConfig.title}
-          isRejected={false}
+          isRejected={userStatus !== 'allowed'}
           isOpen={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
+          userStatus={userStatus}
         />
       )}
       
@@ -447,7 +346,8 @@ export default function App() {
           userName={user?.displayName || user?.email?.split('@')[0] || 'Teman'} 
           welcomeText={appConfig.welcome}
           themeColor={appConfig.color}
-          isRejected={false}
+          isRejected={userStatus !== 'allowed'}
+          userStatus={userStatus}
           appTitle={appConfig.title}
           onMenuToggle={() => setSidebarOpen(true)}
         />
@@ -458,7 +358,7 @@ export default function App() {
           projects={projects} 
           onSelectProject={handleSelectProject} 
           onDeleteProject={handleDeleteProject}
-          isRejected={false}
+          isRejected={userStatus !== 'allowed'}
           onMenuToggle={() => setSidebarOpen(true)}
         />
       )}
@@ -478,7 +378,8 @@ export default function App() {
           project={currentProject} 
           onUpdateProject={handleUpdateProject} 
           token={token} 
-          isRejected={false}
+          isRejected={userStatus !== 'allowed'}
+          userStatus={userStatus}
         />
       )}
 

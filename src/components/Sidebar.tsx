@@ -30,6 +30,7 @@ interface SidebarProps {
   isRejected?: boolean;
   isOpen?: boolean;
   onClose?: () => void;
+  userStatus?: string;
 }
 
 export default function Sidebar({ 
@@ -43,7 +44,8 @@ export default function Sidebar({
   appTitle = 'AI_GG', 
   isRejected = false,
   isOpen = false,
-  onClose
+  onClose,
+  userStatus = 'allowed'
 }: SidebarProps) {
   const [showAIModal, setShowAIModal] = useState(false);
   const [selectedModel, setSelectedModel] = useState('gemini-1.5-pro');
@@ -66,13 +68,30 @@ export default function Sidebar({
         <div className="p-4 flex items-center justify-between border-b border-[#2a2a2a] cursor-pointer hover:bg-[#1f1f1f] transition-colors group">
           <div className="flex items-center gap-3 overflow-hidden">
             {user?.photoURL ? (
-              <img src={user.photoURL} alt="Profile" className="w-6 h-6 rounded-full" referrerPolicy="no-referrer" />
+              <img src={user.photoURL} alt="Profile" className="w-8 h-8 rounded-full" referrerPolicy="no-referrer" />
             ) : (
-              <div className="w-6 h-6 rounded-full bg-orange-600 flex items-center justify-center text-white font-bold text-xs shrink-0">
+              <div className="w-8 h-8 rounded-full bg-orange-600 flex items-center justify-center text-white font-bold text-xs shrink-0">
                 {user?.displayName ? user.displayName.charAt(0) : 'U'}
               </div>
             )}
-            <span className="font-medium text-white truncate">{user?.displayName || 'User'}</span>
+            <div className="flex flex-col min-w-0">
+              <span className="font-medium text-white truncate leading-tight">{user?.displayName || 'User'}</span>
+              {userStatus === 'pending' && (
+                <span className="text-[10px] text-amber-500 font-semibold bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded-md mt-1 w-fit">
+                  Menunggu Persetujuan
+                </span>
+              )}
+              {userStatus === 'rejected' && (
+                <span className="text-[10px] text-red-500 font-semibold bg-red-500/10 border border-red-500/20 px-1.5 py-0.5 rounded-md mt-1 w-fit">
+                  Akses Ditolak
+                </span>
+              )}
+              {userStatus === 'allowed' && (
+                <span className="text-[10px] text-emerald-500 font-semibold bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded-md mt-1 w-fit">
+                  Disetujui
+                </span>
+              )}
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={(e) => { e.stopPropagation(); onLogout(); }} className="text-gray-500 hover:text-red-400 transition-colors" title="Logout">

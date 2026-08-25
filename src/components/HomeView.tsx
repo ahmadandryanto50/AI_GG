@@ -19,6 +19,7 @@ interface HomeViewProps {
   welcomeText?: string;
   themeColor?: string;
   isRejected?: boolean;
+  userStatus?: string;
   appTitle?: string;
   onMenuToggle?: () => void;
 }
@@ -29,6 +30,7 @@ export default function HomeView({
   welcomeText = 'Sistem apa yang ingin kamu bangun hari ini', 
   themeColor = '#3460e4', 
   isRejected = false,
+  userStatus = 'allowed',
   appTitle = 'AI_GG',
   onMenuToggle
 }: HomeViewProps) {
@@ -91,7 +93,13 @@ export default function HomeView({
   };
 
   const handleBuildClick = () => {
-    if (isRejected) return;
+    if (isRejected) {
+      alert(userStatus === 'pending' 
+        ? "Akun Anda belum aktif. Silakan hubungi Super Admin untuk menyetujui akun Anda terlebih dahulu." 
+        : "Akses Ditolak: Anda tidak memiliki izin untuk membuat proyek baru."
+      );
+      return;
+    }
     if (prompt.trim() || attachments.length > 0) {
       onBuild(prompt || "Buatkan aplikasi default", attachments);
     } else {
@@ -168,12 +176,21 @@ export default function HomeView({
 
           {/* Rejected Warning Banner */}
           {isRejected && (
-            <div className="w-full bg-red-950/40 border border-red-800/50 text-red-400 p-4 rounded-xl flex items-center gap-3 text-sm mb-6 shadow-lg">
-              <ShieldAlert className="w-5 h-5 text-red-500 shrink-0" />
-              <div>
-                <span className="font-bold">Akses Dibatasi oleh Admin:</span> Anda hanya diperbolehkan melihat-lihat tampilan aplikasi. Fitur membuat dan memperbarui proyek dinonaktifkan.
+            userStatus === 'pending' ? (
+              <div className="w-full bg-amber-950/40 border border-amber-800/50 text-amber-400 p-4 rounded-xl flex items-center gap-3 text-sm mb-6 shadow-lg">
+                <ShieldAlert className="w-5 h-5 text-amber-500 shrink-0 animate-pulse" />
+                <div className="flex-1">
+                  <span className="font-bold">Aktivasi Akun Tertunda:</span> Akun Anda sedang menunggu persetujuan dari Super Admin. Anda dapat melihat-lihat proyek contoh, namun fitur membuat & mengubah proyek dinonaktifkan sementara.
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="w-full bg-red-950/40 border border-red-800/50 text-red-400 p-4 rounded-xl flex items-center gap-3 text-sm mb-6 shadow-lg">
+                <ShieldAlert className="w-5 h-5 text-red-500 shrink-0" />
+                <div>
+                  <span className="font-bold">Akses Dibatasi oleh Admin:</span> Akun Anda ditangguhkan atau ditolak. Anda hanya diperbolehkan melihat-lihat tampilan aplikasi. Fitur membuat dan memperbarui proyek dinonaktifkan.
+                </div>
+              </div>
+            )
           )}
 
           {/* Prompt Input */}
