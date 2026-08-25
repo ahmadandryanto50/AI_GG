@@ -15,6 +15,8 @@ import {
   UserCheck,
   UserX
 } from 'lucide-react';
+import { db } from '../lib/auth';
+import { collection, doc, updateDoc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 
 interface UserLog {
   name: string;
@@ -141,6 +143,36 @@ export default function SettingsView({ onBack, onUpdateConfig }: SettingsViewPro
     }
   };
 
+  // Set up real-time listener for users in settings if authenticated
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    setLoadingUsers(true);
+    // Listen to real-time updates from Firestore "users" collection
+    const unsubscribe = onSnapshot(collection(db, 'users'), (snapshot) => {
+      const usersList: Record<string, UserLog> = {};
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        usersList[docSnap.id] = {
+          name: data.name || docSnap.id.split('@')[0],
+          status: data.status || 'pending',
+          firstLogin: data.firstLogin || new Date().toISOString(),
+          lastLogin: data.lastLogin
+        };
+      });
+
+      setUsers(usersList);
+      localStorage.setItem('cfg_users_list', JSON.stringify(usersList));
+      setLoadingUsers(false);
+    }, (err) => {
+      console.error("Gagal mendengarkan update database Firestore:", err);
+      // Fallback: load users once from API, then fallback to localStorage
+      fetchUsers();
+    });
+
+    return () => unsubscribe();
+  }, [isAuthenticated]);
+
   const fetchUsers = async () => {
     setLoadingUsers(true);
     try {
@@ -161,27 +193,43 @@ export default function SettingsView({ onBack, onUpdateConfig }: SettingsViewPro
 
   const handleUpdateStatus = async (email: string, status: 'allowed' | 'rejected') => {
     try {
-      const res = await fetch(`/api/settings/users/${encodeURIComponent(email)}/status`, {
+      // 1. Update Cloud Firestore (the primary synchronized database)
+      const userDocRef = doc(db, 'users', email);
+      await updateDoc(userDocRef, { status });
+      
+      // 2. Also update Express backend API if running in fullstack mode
+      fetch(`/api/settings/users/${encodeURIComponent(email)}/status`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status })
-      });
-      if (!res.ok) throw new Error('Offline/Vercel Mode');
-      const data = await res.json();
-      if (data.success) {
-        setUsers(data.users);
-        localStorage.setItem('cfg_users_list', JSON.stringify(data.users));
-      }
+      }).catch(() => {});
+      
     } catch (err) {
-      // Local storage fallback
-      const localUsers = JSON.parse(localStorage.getItem('cfg_users_list') || '{}');
-      if (localUsers[email]) {
-        localUsers[email].status = status;
-      } else {
-        localUsers[email] = { name: email.split('@')[0], status, firstLogin: new Date().toISOString() };
+      console.error("Gagal memperbarui status via Firestore, mencoba backend/local storage...", err);
+      
+      try {
+        const res = await fetch(`/api/settings/users/${encodeURIComponent(email)}/status`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status })
+        });
+        if (!res.ok) throw new Error('Offline/Vercel Mode');
+        const data = await res.json();
+        if (data.success) {
+          setUsers(data.users);
+          localStorage.setItem('cfg_users_list', JSON.stringify(data.users));
+        }
+      } catch (fallbackErr) {
+        // Local storage fallback
+        const localUsers = JSON.parse(localStorage.getItem('cfg_users_list') || '{}');
+        if (localUsers[email]) {
+          localUsers[email].status = status;
+        } else {
+          localUsers[email] = { name: email.split('@')[0], status, firstLogin: new Date().toISOString() };
+        }
+        localStorage.setItem('cfg_users_list', JSON.stringify(localUsers));
+        setUsers(localUsers);
       }
-      localStorage.setItem('cfg_users_list', JSON.stringify(localUsers));
-      setUsers(localUsers);
     }
   };
 

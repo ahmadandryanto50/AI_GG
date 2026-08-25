@@ -1,0 +1,35 @@
+{
+  "entities": {
+    "UserLog": {
+      "title": "User Log",
+      "description": "User log and authorization status for application access control",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The display name of the user"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["allowed", "rejected", "pending"],
+          "description": "Authorization status of the user"
+        },
+        "firstLogin": {
+          "type": "string",
+          "description": "ISO timestamp of first login"
+        },
+        "lastLogin": {
+          "type": "string",
+          "description": "ISO timestamp of last login"
+        }
+      },
+      "required": ["name", "status", "firstLogin"]
+    }
+  },
+  "firestore": {
+    "/users/{email}": {
+      "schema": "UserLog",
+      "description": "Users authorization registry indexed by email"
+    }
+  }
+}

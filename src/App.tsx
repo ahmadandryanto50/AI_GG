@@ -7,7 +7,8 @@ import WorkspaceView from './components/WorkspaceView';
 import LoginView from './components/LoginView';
 import AllProjectsView from './components/AllProjectsView';
 import SettingsView from './components/SettingsView';
-import { initAuth, logout } from './lib/auth';
+import { initAuth, logout, db } from './lib/auth';
+import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { User } from 'firebase/auth';
 import { ShieldAlert } from 'lucide-react';
 
@@ -64,37 +65,86 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (user && user.email) {
+    const checkAndLogUser = async () => {
+      if (!user || !user.email) {
+        setUserStatus('allowed');
+        return;
+      }
+      
       setUserStatus('checking');
-      fetch('/api/settings/log-user', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          email: user.email, 
-          displayName: user.displayName || user.email.split('@')[0] 
-        })
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data.success) {
-          setUserStatus(data.status || 'pending');
+      
+      try {
+        // Try Firestore database first (synchronized across all devices/browsers in real time)
+        const userDocRef = doc(db, 'users', user.email);
+        const userDoc = await getDoc(userDocRef);
+        const isAdmin = user.email === "ahmad.andryanto50@admin.smp.belajar.id";
+        
+        if (userDoc.exists()) {
+          const data = userDoc.data();
+          const currentStatus = data.status || (isAdmin ? 'allowed' : 'pending');
+          
+          // Update last login
+          await updateDoc(userDocRef, {
+            lastLogin: new Date().toISOString(),
+            name: user.displayName || user.email.split('@')[0]
+          });
+          
+          setUserStatus(currentStatus);
         } else {
-          setUserStatus('pending');
+          // Document doesn't exist, create it
+          const defaultStatus = isAdmin ? 'allowed' : 'pending';
+          const newUserPayload = {
+            name: user.displayName || user.email.split('@')[0],
+            status: defaultStatus,
+            firstLogin: new Date().toISOString(),
+            lastLogin: new Date().toISOString()
+          };
+          
+          await setDoc(userDocRef, newUserPayload);
+          setUserStatus(defaultStatus);
         }
-      })
-      .catch((err) => {
-        console.error("Gagal memeriksa hak akses user:", err);
-        // Offline / Vercel Fallback
+        
+        // Also call Express backend API in background for relational/local logging if available
+        fetch('/api/settings/log-user', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            email: user.email, 
+            displayName: user.displayName || user.email.split('@')[0] 
+          })
+        }).catch(() => {});
+        
+      } catch (err) {
+        console.error("Gagal memeriksa hak akses user via Firestore, mencoba backend/local storage...", err);
+        
+        // Fallback to Server API if Firestore fails
+        try {
+          const response = await fetch('/api/settings/log-user', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              email: user.email, 
+              displayName: user.displayName || user.email.split('@')[0] 
+            })
+          });
+          const data = await response.json();
+          if (data.success) {
+            setUserStatus(data.status || 'pending');
+            return;
+          }
+        } catch (apiErr) {
+          console.error("Gagal memeriksa via API:", apiErr);
+        }
+        
+        // Final fallback: Local storage (Offline / Client-only)
         const isClientAdmin = user.email === "ahmad.andryanto50@admin.smp.belajar.id";
         if (isClientAdmin) {
           setUserStatus('allowed');
         } else {
-          // Check local storage for the user status
           const localUsersList = JSON.parse(localStorage.getItem('cfg_users_list') || '{}');
           if (localUsersList[user.email]) {
             setUserStatus(localUsersList[user.email].status);
           } else {
-            // Save as pending locally
             localUsersList[user.email] = {
               name: user.displayName || user.email.split('@')[0],
               status: 'pending',
@@ -104,10 +154,10 @@ export default function App() {
             setUserStatus('pending');
           }
         }
-      });
-    } else {
-      setUserStatus('allowed');
-    }
+      }
+    };
+
+    checkAndLogUser();
   }, [user]);
 
   const handleBuildStart = (prompt: string, attachments: Attachment[]) => {
