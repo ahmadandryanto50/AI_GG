@@ -716,8 +716,9 @@ function addAsset(data) {
         });
         
         let data;
-        if (!response.ok) {
-          // Fallback immediately on API failure
+        const contentType = response.headers.get('content-type') || '';
+        if (!response.ok || !contentType.includes('application/json')) {
+          // Fallback immediately on API failure or HTML response on static host
           data = generateCodeClientSide(prompt);
         } else {
           data = await response.json();

@@ -16,7 +16,7 @@ import {
   UserX
 } from 'lucide-react';
 import { db } from '../lib/auth';
-import { collection, doc, updateDoc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
+import { collection, doc, getDoc, updateDoc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 
 interface UserLog {
   name: string;
@@ -30,14 +30,43 @@ interface SettingsViewProps {
   onUpdateConfig: () => void;
 }
 
+const SUPER_ADMIN_EMAIL = "ahmad.andryanto50@admin.smp.belajar.id";
+const DEFAULT_SUPER_ADMIN: Record<string, UserLog> = {
+  [SUPER_ADMIN_EMAIL]: {
+    name: "AHMAD ANDRYANTO",
+    status: "allowed",
+    firstLogin: "2026-08-25T00:00:00.000Z",
+    lastLogin: new Date().toISOString()
+  }
+};
+
+const getInitialUsersList = (): Record<string, UserLog> => {
+  try {
+    const saved = localStorage.getItem('cfg_users_list');
+    const parsed = saved ? JSON.parse(saved) : {};
+    return {
+      ...DEFAULT_SUPER_ADMIN,
+      ...parsed,
+      [SUPER_ADMIN_EMAIL]: {
+        name: parsed[SUPER_ADMIN_EMAIL]?.name || "AHMAD ANDRYANTO",
+        status: "allowed",
+        firstLogin: parsed[SUPER_ADMIN_EMAIL]?.firstLogin || "2026-08-25T00:00:00.000Z",
+        lastLogin: new Date().toISOString()
+      }
+    };
+  } catch (e) {
+    return DEFAULT_SUPER_ADMIN;
+  }
+};
+
 export default function SettingsView({ onBack, onUpdateConfig }: SettingsViewProps) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [activeTab, setActiveTab] = useState<'users' | 'appearance' | 'security'>('users');
   
-  // Tab users state
-  const [users, setUsers] = useState<Record<string, UserLog>>({});
+  // Tab users state initialized with persistent admin data
+  const [users, setUsers] = useState<Record<string, UserLog>>(getInitialUsersList);
   const [loadingUsers, setLoadingUsers] = useState(false);
   
   // Tab appearance state
@@ -147,26 +176,35 @@ export default function SettingsView({ onBack, onUpdateConfig }: SettingsViewPro
   useEffect(() => {
     if (!isAuthenticated) return;
 
-    setLoadingUsers(true);
+    // Only set loading indicator if user list is currently empty
+    if (Object.keys(users).length === 0) {
+      setLoadingUsers(true);
+    }
+
     // Listen to real-time updates from Firestore "users" collection
     const unsubscribe = onSnapshot(collection(db, 'users'), (snapshot) => {
-      const usersList: Record<string, UserLog> = {};
+      const usersList: Record<string, UserLog> = { ...DEFAULT_SUPER_ADMIN };
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
-        usersList[docSnap.id] = {
-          name: data.name || docSnap.id.split('@')[0],
-          status: data.status || 'pending',
+        const emailKey = docSnap.id.toLowerCase();
+        usersList[emailKey] = {
+          name: data.name || emailKey.split('@')[0],
+          status: emailKey === SUPER_ADMIN_EMAIL ? 'allowed' : (data.status || 'pending'),
           firstLogin: data.firstLogin || new Date().toISOString(),
           lastLogin: data.lastLogin
         };
       });
 
+      // Always guarantee Super Admin is in the list
+      if (!usersList[SUPER_ADMIN_EMAIL]) {
+        usersList[SUPER_ADMIN_EMAIL] = DEFAULT_SUPER_ADMIN[SUPER_ADMIN_EMAIL];
+      }
+
       setUsers(usersList);
       localStorage.setItem('cfg_users_list', JSON.stringify(usersList));
       setLoadingUsers(false);
     }, (err) => {
-      console.error("Gagal mendengarkan update database Firestore:", err);
-      // Fallback: load users once from API, then fallback to localStorage
+      console.log("Firestore snapshot info:", err);
       fetchUsers();
     });
 
@@ -174,18 +212,27 @@ export default function SettingsView({ onBack, onUpdateConfig }: SettingsViewPro
   }, [isAuthenticated]);
 
   const fetchUsers = async () => {
-    setLoadingUsers(true);
+    if (Object.keys(users).length === 0) {
+      setLoadingUsers(true);
+    }
     try {
       const res = await fetch('/api/settings/users');
-      if (!res.ok) throw new Error('Offline/Vercel Mode');
+      const contentType = res.headers.get('content-type') || '';
+      if (!res.ok || !contentType.includes('application/json')) throw new Error('Offline/Vercel Mode');
       const data = await res.json();
-      if (data.success) {
-        setUsers(data.users);
-        localStorage.setItem('cfg_users_list', JSON.stringify(data.users));
+      if (data.success && data.users) {
+        const merged = { ...DEFAULT_SUPER_ADMIN, ...data.users };
+        if (!merged[SUPER_ADMIN_EMAIL]) {
+          merged[SUPER_ADMIN_EMAIL] = DEFAULT_SUPER_ADMIN[SUPER_ADMIN_EMAIL];
+        }
+        setUsers(merged);
+        localStorage.setItem('cfg_users_list', JSON.stringify(merged));
       }
     } catch (err) {
-      const localUsers = JSON.parse(localStorage.getItem('cfg_users_list') || '{}');
-      setUsers(localUsers);
+      const saved = localStorage.getItem('cfg_users_list');
+      const localUsers = saved ? JSON.parse(saved) : {};
+      const merged = { ...DEFAULT_SUPER_ADMIN, ...localUsers };
+      setUsers(merged);
     } finally {
       setLoadingUsers(false);
     }
@@ -196,7 +243,18 @@ export default function SettingsView({ onBack, onUpdateConfig }: SettingsViewPro
       // 1. Update Cloud Firestore (the primary synchronized database) using normalized lowercase email
       const emailLower = email.toLowerCase();
       const userDocRef = doc(db, 'users', emailLower);
-      await updateDoc(userDocRef, { status });
+      const userDocSnap = await getDoc(userDocRef);
+      
+      if (userDocSnap.exists()) {
+        await updateDoc(userDocRef, { status });
+      } else {
+        await setDoc(userDocRef, {
+          name: emailLower.split('@')[0],
+          status,
+          firstLogin: new Date().toISOString(),
+          lastLogin: new Date().toISOString()
+        });
+      }
       
       // 2. Also update Express backend API if running in fullstack mode
       fetch(`/api/settings/users/${encodeURIComponent(emailLower)}/status`, {
@@ -434,7 +492,7 @@ export default function SettingsView({ onBack, onUpdateConfig }: SettingsViewPro
                 </button>
               </div>
 
-              {loadingUsers ? (
+              {loadingUsers && Object.keys(users).length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-20 gap-3">
                   <RefreshCw className="w-8 h-8 text-orange-500 animate-spin" />
                   <p className="text-sm text-gray-500">Memuat log aktivitas pengguna...</p>

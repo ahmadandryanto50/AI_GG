@@ -8,7 +8,7 @@ import LoginView from './components/LoginView';
 import AllProjectsView from './components/AllProjectsView';
 import SettingsView from './components/SettingsView';
 import { initAuth, logout, db } from './lib/auth';
-import { doc, getDoc, setDoc, updateDoc, collection, getDocs, deleteDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, collection, getDocs, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { User } from 'firebase/auth';
 import { ShieldAlert } from 'lucide-react';
 
@@ -65,6 +65,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    let unsubscribeUserDoc: (() => void) | null = null;
+    let unsubscribeProjects: (() => void) | null = null;
+
     const checkAndLogUser = async () => {
       if (!user || !user.email) {
         setUserStatus('allowed');
@@ -73,13 +76,12 @@ export default function App() {
       
       setUserStatus('checking');
       const emailLower = user.email.toLowerCase();
+      const isAdmin = emailLower === "ahmad.andryanto50@admin.smp.belajar.id";
+      const userDocRef = doc(db, 'users', emailLower);
       
       try {
-        // Try Firestore database first (synchronized across all devices/browsers in real time)
-        const userDocRef = doc(db, 'users', emailLower);
+        // 1. Try Firestore database first (synchronized across all devices/browsers in real time)
         const userDoc = await getDoc(userDocRef);
-        const isAdmin = emailLower === "ahmad.andryanto50@admin.smp.belajar.id";
-        
         let finalStatus: 'allowed' | 'rejected' | 'pending' = isAdmin ? 'allowed' : 'pending';
         
         if (userDoc.exists()) {
@@ -90,9 +92,9 @@ export default function App() {
           await updateDoc(userDocRef, {
             lastLogin: new Date().toISOString(),
             name: user.displayName || user.email.split('@')[0]
-          });
+          }).catch(() => {});
         } else {
-          // Document doesn't exist, create it
+          // Document doesn't exist, create it in Firestore so Super Admin sees it immediately
           const newUserPayload = {
             name: user.displayName || user.email.split('@')[0],
             status: finalStatus,
@@ -100,40 +102,48 @@ export default function App() {
             lastLogin: new Date().toISOString()
           };
           
-          await setDoc(userDocRef, newUserPayload);
+          await setDoc(userDocRef, newUserPayload).catch(() => {});
         }
         
         setUserStatus(finalStatus);
         localStorage.setItem(`appscript_user_status_${emailLower}`, finalStatus);
         
-        // If allowed, fetch projects from Firestore in the background
-        if (finalStatus === 'allowed') {
-          try {
-            const projectsColRef = collection(db, 'users', emailLower, 'projects');
-            const querySnapshot = await getDocs(projectsColRef);
-            const cloudProjects: Project[] = [];
-            querySnapshot.forEach((docSnap) => {
-              const data = docSnap.data();
-              cloudProjects.push({
-                id: docSnap.id,
-                title: data.title || 'Untitled Project',
-                files: data.files || [],
-                history: data.history || [],
-                updatedAt: data.updatedAt || Date.now()
-              });
-            });
-            
-            // Sort by updatedAt descending
-            cloudProjects.sort((a, b) => b.updatedAt - a.updatedAt);
-            
-            if (cloudProjects.length > 0) {
-              setProjects(cloudProjects);
-              localStorage.setItem('appscript_projects', JSON.stringify(cloudProjects));
-            }
-          } catch (projErr) {
-            console.error("Gagal memuat proyek dari Firestore:", projErr);
+        // 2. Real-time listener for user status changes (e.g., when Admin approves in Settings on another laptop/browser)
+        unsubscribeUserDoc = onSnapshot(userDocRef, (snap) => {
+          if (snap.exists()) {
+            const data = snap.data();
+            const liveStatus = data.status || (isAdmin ? 'allowed' : 'pending');
+            setUserStatus(liveStatus);
+            localStorage.setItem(`appscript_user_status_${emailLower}`, liveStatus);
           }
-        }
+        }, (err) => {
+          console.log("Informasi koneksi status user (offline fallback diaktifkan):", err);
+        });
+
+        // 3. Real-time listener for user's projects from Firestore so projects stay synced across browsers/devices!
+        const projectsColRef = collection(db, 'users', emailLower, 'projects');
+        unsubscribeProjects = onSnapshot(projectsColRef, (querySnapshot) => {
+          const cloudProjects: Project[] = [];
+          querySnapshot.forEach((docSnap) => {
+            const data = docSnap.data();
+            cloudProjects.push({
+              id: docSnap.id,
+              title: data.title || 'Untitled Project',
+              files: data.files || [],
+              history: data.history || [],
+              updatedAt: data.updatedAt || Date.now()
+            });
+          });
+          
+          cloudProjects.sort((a, b) => b.updatedAt - a.updatedAt);
+          
+          if (cloudProjects.length > 0) {
+            setProjects(cloudProjects);
+            localStorage.setItem('appscript_projects', JSON.stringify(cloudProjects));
+          }
+        }, (projErr) => {
+          console.log("Informasi koneksi proyek Firestore (offline fallback diaktifkan):", projErr);
+        });
         
         // Also call Express backend API in background for relational/local logging if available
         fetch('/api/settings/log-user', {
@@ -153,56 +163,49 @@ export default function App() {
         if (cachedStatus === 'allowed' || cachedStatus === 'pending' || cachedStatus === 'rejected') {
           console.log(`Menggunakan cache status lokal: ${cachedStatus}`);
           setUserStatus(cachedStatus as any);
-          return;
-        }
-        
-        // Fallback to Server API if Firestore fails
-        try {
-          const response = await fetch('/api/settings/log-user', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-              email: emailLower, 
-              displayName: user.displayName || user.email.split('@')[0] 
-            })
-          });
-          const data = await response.json();
-          if (data.success) {
-            const currentStatus = data.status || 'pending';
-            setUserStatus(currentStatus);
-            localStorage.setItem(`appscript_user_status_${emailLower}`, currentStatus);
-            return;
-          }
-        } catch (apiErr) {
-          console.error("Gagal memeriksa via API:", apiErr);
-        }
-        
-        // Final fallback: Local storage (Offline / Client-only)
-        const isClientAdmin = emailLower === "ahmad.andryanto50@admin.smp.belajar.id";
-        if (isClientAdmin) {
-          setUserStatus('allowed');
-          localStorage.setItem(`appscript_user_status_${emailLower}`, 'allowed');
         } else {
-          const localUsersList = JSON.parse(localStorage.getItem('cfg_users_list') || '{}');
-          if (localUsersList[emailLower]) {
-            const currentStatus = localUsersList[emailLower].status;
-            setUserStatus(currentStatus);
-            localStorage.setItem(`appscript_user_status_${emailLower}`, currentStatus);
-          } else {
-            localUsersList[emailLower] = {
-              name: user.displayName || user.email.split('@')[0],
-              status: 'pending',
-              firstLogin: new Date().toISOString()
-            };
-            localStorage.setItem('cfg_users_list', JSON.stringify(localUsersList));
-            setUserStatus('pending');
-            localStorage.setItem(`appscript_user_status_${emailLower}`, 'pending');
+          // Fallback to Server API if Firestore fails
+          try {
+            const response = await fetch('/api/settings/log-user', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                email: emailLower, 
+                displayName: user.displayName || user.email.split('@')[0] 
+              })
+            });
+            const contentType = response.headers.get('content-type') || '';
+            if (response.ok && contentType.includes('application/json')) {
+              const data = await response.json();
+              if (data.success) {
+                const currentStatus = data.status || 'pending';
+                setUserStatus(currentStatus);
+                localStorage.setItem(`appscript_user_status_${emailLower}`, currentStatus);
+              }
+            } else {
+              throw new Error('Not JSON / Offline server');
+            }
+          } catch (apiErr) {
+            console.error("Gagal memeriksa via API:", apiErr);
+            const isClientAdmin = emailLower === "ahmad.andryanto50@admin.smp.belajar.id";
+            if (isClientAdmin) {
+              setUserStatus('allowed');
+              localStorage.setItem(`appscript_user_status_${emailLower}`, 'allowed');
+            } else {
+              setUserStatus('pending');
+              localStorage.setItem(`appscript_user_status_${emailLower}`, 'pending');
+            }
           }
         }
       }
     };
 
     checkAndLogUser();
+
+    return () => {
+      if (unsubscribeUserDoc) unsubscribeUserDoc();
+      if (unsubscribeProjects) unsubscribeProjects();
+    };
   }, [user]);
 
   const handleBuildStart = (prompt: string, attachments: Attachment[]) => {
