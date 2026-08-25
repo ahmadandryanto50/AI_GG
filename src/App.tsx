@@ -77,14 +77,33 @@ export default function App() {
       .then(res => res.json())
       .then(data => {
         if (data.success) {
-          setUserStatus(data.status || 'allowed');
+          setUserStatus(data.status || 'pending');
         } else {
-          setUserStatus('allowed');
+          setUserStatus('pending');
         }
       })
       .catch((err) => {
         console.error("Gagal memeriksa hak akses user:", err);
-        setUserStatus('allowed');
+        // Offline / Vercel Fallback
+        const isClientAdmin = user.email === "ahmad.andryanto50@admin.smp.belajar.id";
+        if (isClientAdmin) {
+          setUserStatus('allowed');
+        } else {
+          // Check local storage for the user status
+          const localUsersList = JSON.parse(localStorage.getItem('cfg_users_list') || '{}');
+          if (localUsersList[user.email]) {
+            setUserStatus(localUsersList[user.email].status);
+          } else {
+            // Save as pending locally
+            localUsersList[user.email] = {
+              name: user.displayName || user.email.split('@')[0],
+              status: 'pending',
+              firstLogin: new Date().toISOString()
+            };
+            localStorage.setItem('cfg_users_list', JSON.stringify(localUsersList));
+            setUserStatus('pending');
+          }
+        }
       });
     } else {
       setUserStatus('allowed');
@@ -226,7 +245,18 @@ export default function App() {
                     }
                   })
                   .catch(() => {
-                    setUserStatus('pending');
+                    // Offline / Vercel Fallback
+                    const isClientAdmin = user.email === "ahmad.andryanto50@admin.smp.belajar.id";
+                    if (isClientAdmin) {
+                      setUserStatus('allowed');
+                    } else {
+                      const localUsersList = JSON.parse(localStorage.getItem('cfg_users_list') || '{}');
+                      if (localUsersList[user.email]) {
+                        setUserStatus(localUsersList[user.email].status);
+                      } else {
+                        setUserStatus('pending');
+                      }
+                    }
                   });
                 }
               }}

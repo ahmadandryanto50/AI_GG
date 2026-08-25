@@ -117,6 +117,9 @@ export default function SettingsView({ onBack, onUpdateConfig }: SettingsViewPro
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password })
       });
+      if (!response.ok && response.status === 404) {
+        throw new Error('Vercel/Offline Mode');
+      }
       const data = await response.json();
       if (data.success) {
         setIsAuthenticated(true);
@@ -126,7 +129,15 @@ export default function SettingsView({ onBack, onUpdateConfig }: SettingsViewPro
         setLoginError(data.message || 'Password salah');
       }
     } catch (err) {
-      setLoginError('Koneksi server gagal');
+      // Offline / Vercel Client-side fallback
+      const savedLocalPassword = localStorage.getItem('cfg_admin_password') || 'gg123';
+      if (password === savedLocalPassword) {
+        setIsAuthenticated(true);
+        fetchUsers();
+        triggerAdminNotification();
+      } else {
+        setLoginError('Password salah (Offline Mode)');
+      }
     }
   };
 
@@ -134,12 +145,15 @@ export default function SettingsView({ onBack, onUpdateConfig }: SettingsViewPro
     setLoadingUsers(true);
     try {
       const res = await fetch('/api/settings/users');
+      if (!res.ok) throw new Error('Offline/Vercel Mode');
       const data = await res.json();
       if (data.success) {
         setUsers(data.users);
+        localStorage.setItem('cfg_users_list', JSON.stringify(data.users));
       }
     } catch (err) {
-      console.error('Gagal mengambil data user', err);
+      const localUsers = JSON.parse(localStorage.getItem('cfg_users_list') || '{}');
+      setUsers(localUsers);
     } finally {
       setLoadingUsers(false);
     }
@@ -152,12 +166,22 @@ export default function SettingsView({ onBack, onUpdateConfig }: SettingsViewPro
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status })
       });
+      if (!res.ok) throw new Error('Offline/Vercel Mode');
       const data = await res.json();
       if (data.success) {
         setUsers(data.users);
+        localStorage.setItem('cfg_users_list', JSON.stringify(data.users));
       }
     } catch (err) {
-      console.error('Gagal mengubah status', err);
+      // Local storage fallback
+      const localUsers = JSON.parse(localStorage.getItem('cfg_users_list') || '{}');
+      if (localUsers[email]) {
+        localUsers[email].status = status;
+      } else {
+        localUsers[email] = { name: email.split('@')[0], status, firstLogin: new Date().toISOString() };
+      }
+      localStorage.setItem('cfg_users_list', JSON.stringify(localUsers));
+      setUsers(localUsers);
     }
   };
 
@@ -195,6 +219,9 @@ export default function SettingsView({ onBack, onUpdateConfig }: SettingsViewPro
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ oldPassword, newPassword })
       });
+      if (!res.ok && res.status === 404) {
+        throw new Error('Vercel/Offline Mode');
+      }
       const data = await res.json();
       if (data.success) {
         setSecMessage({ text: 'Password sukses diubah!', type: 'success' });
@@ -205,7 +232,17 @@ export default function SettingsView({ onBack, onUpdateConfig }: SettingsViewPro
         setSecMessage({ text: data.message || 'Password lama salah', type: 'error' });
       }
     } catch (err) {
-      setSecMessage({ text: 'Gagal menghubungi server', type: 'error' });
+      // Local password fallback
+      const savedLocalPassword = localStorage.getItem('cfg_admin_password') || 'gg123';
+      if (oldPassword === savedLocalPassword) {
+        localStorage.setItem('cfg_admin_password', newPassword);
+        setSecMessage({ text: 'Password sukses diubah secara lokal!', type: 'success' });
+        setOldPassword('');
+        setNewPassword('');
+        setConfirmNewPassword('');
+      } else {
+        setSecMessage({ text: 'Password lama salah (Offline Mode)', type: 'error' });
+      }
     }
   };
 

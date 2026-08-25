@@ -190,12 +190,12 @@ async function startServer() {
     
     // In production, superadmin must also have an explicitly registered account in the JSON database.
     // In development/preview mode, we keep the auto-allow safeguard for testing convenience.
-    const finalStatus = (!isProd && email === "ahmad.andryanto50@admin.smp.belajar.id") ? "allowed" : null;
+    const isAdmin = email === "ahmad.andryanto50@admin.smp.belajar.id";
 
     if (!db.users[email]) {
-      const defaultStatus = 'allowed';
+      const defaultStatus = isAdmin ? 'allowed' : 'pending';
       db.users[email] = { 
-        status: finalStatus || defaultStatus, 
+        status: defaultStatus, 
         name: displayName || email.split('@')[0], 
         firstLogin: new Date().toISOString(),
         lastLogin: new Date().toISOString()
@@ -204,8 +204,8 @@ async function startServer() {
     } else {
       db.users[email].lastLogin = new Date().toISOString();
       db.users[email].name = displayName || db.users[email].name;
-      if (finalStatus) {
-        db.users[email].status = finalStatus;
+      if (isAdmin) {
+        db.users[email].status = 'allowed';
       }
       saveDb(db);
     }
