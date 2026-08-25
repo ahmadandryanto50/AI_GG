@@ -193,12 +193,13 @@ export default function SettingsView({ onBack, onUpdateConfig }: SettingsViewPro
 
   const handleUpdateStatus = async (email: string, status: 'allowed' | 'rejected') => {
     try {
-      // 1. Update Cloud Firestore (the primary synchronized database)
-      const userDocRef = doc(db, 'users', email);
+      // 1. Update Cloud Firestore (the primary synchronized database) using normalized lowercase email
+      const emailLower = email.toLowerCase();
+      const userDocRef = doc(db, 'users', emailLower);
       await updateDoc(userDocRef, { status });
       
       // 2. Also update Express backend API if running in fullstack mode
-      fetch(`/api/settings/users/${encodeURIComponent(email)}/status`, {
+      fetch(`/api/settings/users/${encodeURIComponent(emailLower)}/status`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status })

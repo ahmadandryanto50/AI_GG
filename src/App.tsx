@@ -8,7 +8,7 @@ import LoginView from './components/LoginView';
 import AllProjectsView from './components/AllProjectsView';
 import SettingsView from './components/SettingsView';
 import { initAuth, logout, db } from './lib/auth';
-import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, collection, getDocs, deleteDoc } from 'firebase/firestore';
 import { User } from 'firebase/auth';
 import { ShieldAlert } from 'lucide-react';
 
@@ -72,36 +72,66 @@ export default function App() {
       }
       
       setUserStatus('checking');
+      const emailLower = user.email.toLowerCase();
       
       try {
         // Try Firestore database first (synchronized across all devices/browsers in real time)
-        const userDocRef = doc(db, 'users', user.email);
+        const userDocRef = doc(db, 'users', emailLower);
         const userDoc = await getDoc(userDocRef);
-        const isAdmin = user.email === "ahmad.andryanto50@admin.smp.belajar.id";
+        const isAdmin = emailLower === "ahmad.andryanto50@admin.smp.belajar.id";
+        
+        let finalStatus: 'allowed' | 'rejected' | 'pending' = isAdmin ? 'allowed' : 'pending';
         
         if (userDoc.exists()) {
           const data = userDoc.data();
-          const currentStatus = data.status || (isAdmin ? 'allowed' : 'pending');
+          finalStatus = data.status || (isAdmin ? 'allowed' : 'pending');
           
           // Update last login
           await updateDoc(userDocRef, {
             lastLogin: new Date().toISOString(),
             name: user.displayName || user.email.split('@')[0]
           });
-          
-          setUserStatus(currentStatus);
         } else {
           // Document doesn't exist, create it
-          const defaultStatus = isAdmin ? 'allowed' : 'pending';
           const newUserPayload = {
             name: user.displayName || user.email.split('@')[0],
-            status: defaultStatus,
+            status: finalStatus,
             firstLogin: new Date().toISOString(),
             lastLogin: new Date().toISOString()
           };
           
           await setDoc(userDocRef, newUserPayload);
-          setUserStatus(defaultStatus);
+        }
+        
+        setUserStatus(finalStatus);
+        
+        // If allowed, fetch projects from Firestore in the background
+        if (finalStatus === 'allowed') {
+          try {
+            const projectsColRef = collection(db, 'users', emailLower, 'projects');
+            const querySnapshot = await getDocs(projectsColRef);
+            const cloudProjects: Project[] = [];
+            querySnapshot.forEach((docSnap) => {
+              const data = docSnap.data();
+              cloudProjects.push({
+                id: docSnap.id,
+                title: data.title || 'Untitled Project',
+                files: data.files || [],
+                history: data.history || [],
+                updatedAt: data.updatedAt || Date.now()
+              });
+            });
+            
+            // Sort by updatedAt descending
+            cloudProjects.sort((a, b) => b.updatedAt - a.updatedAt);
+            
+            if (cloudProjects.length > 0) {
+              setProjects(cloudProjects);
+              localStorage.setItem('appscript_projects', JSON.stringify(cloudProjects));
+            }
+          } catch (projErr) {
+            console.error("Gagal memuat proyek dari Firestore:", projErr);
+          }
         }
         
         // Also call Express backend API in background for relational/local logging if available
@@ -109,7 +139,7 @@ export default function App() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
-            email: user.email, 
+            email: emailLower, 
             displayName: user.displayName || user.email.split('@')[0] 
           })
         }).catch(() => {});
@@ -123,13 +153,14 @@ export default function App() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ 
-              email: user.email, 
+              email: emailLower, 
               displayName: user.displayName || user.email.split('@')[0] 
             })
           });
           const data = await response.json();
           if (data.success) {
-            setUserStatus(data.status || 'pending');
+            const currentStatus = data.status || 'pending';
+            setUserStatus(currentStatus);
             return;
           }
         } catch (apiErr) {
@@ -137,15 +168,15 @@ export default function App() {
         }
         
         // Final fallback: Local storage (Offline / Client-only)
-        const isClientAdmin = user.email === "ahmad.andryanto50@admin.smp.belajar.id";
+        const isClientAdmin = emailLower === "ahmad.andryanto50@admin.smp.belajar.id";
         if (isClientAdmin) {
           setUserStatus('allowed');
         } else {
           const localUsersList = JSON.parse(localStorage.getItem('cfg_users_list') || '{}');
-          if (localUsersList[user.email]) {
-            setUserStatus(localUsersList[user.email].status);
+          if (localUsersList[emailLower]) {
+            setUserStatus(localUsersList[emailLower].status);
           } else {
-            localUsersList[user.email] = {
+            localUsersList[emailLower] = {
               name: user.displayName || user.email.split('@')[0],
               status: 'pending',
               firstLogin: new Date().toISOString()
@@ -179,13 +210,40 @@ export default function App() {
       updatedAt: Date.now()
     };
     
-    setProjects(prev => [newProject, ...prev]);
+    setProjects(prev => {
+      const updated = [newProject, ...prev];
+      localStorage.setItem('appscript_projects', JSON.stringify(updated));
+      return updated;
+    });
+
+    // Save to Firestore in background if authenticated
+    if (user && user.email) {
+      const emailLower = user.email.toLowerCase();
+      const projDocRef = doc(db, 'users', emailLower, 'projects', newProject.id);
+      setDoc(projDocRef, newProject).catch(err => {
+        console.error("Gagal menyimpan proyek baru ke Firestore:", err);
+      });
+    }
+
     setCurrentProjectId(newProject.id);
     setAppState('workspace');
   };
 
   const handleUpdateProject = (updatedProject: Project) => {
-    setProjects(prev => prev.map(p => p.id === updatedProject.id ? updatedProject : p));
+    setProjects(prev => {
+      const updated = prev.map(p => p.id === updatedProject.id ? updatedProject : p);
+      localStorage.setItem('appscript_projects', JSON.stringify(updated));
+      return updated;
+    });
+
+    // Update in Firestore in background if authenticated
+    if (user && user.email) {
+      const emailLower = user.email.toLowerCase();
+      const projDocRef = doc(db, 'users', emailLower, 'projects', updatedProject.id);
+      setDoc(projDocRef, updatedProject).catch(err => {
+        console.error("Gagal mengupdate proyek ke Firestore:", err);
+      });
+    }
   };
   
   const handleSelectProject = (projectId: string) => {
@@ -196,7 +254,21 @@ export default function App() {
   };
 
   const handleDeleteProject = (id: string) => {
-    setProjects(prev => prev.filter(p => p.id !== id));
+    setProjects(prev => {
+      const updated = prev.filter(p => p.id !== id);
+      localStorage.setItem('appscript_projects', JSON.stringify(updated));
+      return updated;
+    });
+
+    // Delete in Firestore in background if authenticated
+    if (user && user.email) {
+      const emailLower = user.email.toLowerCase();
+      const projDocRef = doc(db, 'users', emailLower, 'projects', id);
+      deleteDoc(projDocRef).catch(err => {
+        console.error("Gagal menghapus proyek dari Firestore:", err);
+      });
+    }
+
     if (currentProjectId === id) {
       setCurrentProjectId(null);
       setAppState('home');

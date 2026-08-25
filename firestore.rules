@@ -13,7 +13,9 @@ service cloud.firestore {
 
     // Helper to check if the user is the Super Admin
     function isSuperAdmin() {
-      return isSignedIn() && request.auth.token.email == 'ahmad.andryanto50@admin.smp.belajar.id';
+      return isSignedIn() && (
+        request.auth.token.email.lower() == 'ahmad.andryanto50@admin.smp.belajar.id'
+      );
     }
 
     // Helper to check if incoming data conforms to user schema
@@ -25,22 +27,22 @@ service cloud.firestore {
 
     match /users/{email} {
       // Any signed in user can read their own status, and the Super Admin can read all
-      allow get: if isSignedIn() && (request.auth.token.email == email || isSuperAdmin());
+      allow get: if isSignedIn() && (request.auth.token.email.lower() == email.lower() || isSuperAdmin());
       
       // Super Admin can list all users
       allow list: if isSuperAdmin();
 
       // Any signed in user can register their own status (create) with 'pending' status
       allow create: if isSignedIn() 
-        && request.auth.token.email == email 
+        && request.auth.token.email.lower() == email.lower() 
         && isValidUserLog(request.resource.data)
-        && (request.resource.data.status == 'pending' || request.auth.token.email == 'ahmad.andryanto50@admin.smp.belajar.id');
+        && (request.resource.data.status == 'pending' || request.auth.token.email.lower() == 'ahmad.andryanto50@admin.smp.belajar.id');
 
       // Users can update their own lastLogin (if status is unchanged), and Super Admin can update any field
       allow update: if isSignedIn() && (
         isSuperAdmin() && isValidUserLog(request.resource.data)
         || (
-          request.auth.token.email == email 
+          request.auth.token.email.lower() == email.lower() 
           && isValidUserLog(request.resource.data)
           && request.resource.data.status == resource.data.status
         )
@@ -48,6 +50,11 @@ service cloud.firestore {
 
       // Super Admin can delete users
       allow delete: if isSuperAdmin();
+
+      // Projects subcollection rules
+      match /projects/{projectId} {
+        allow read, write: if isSignedIn() && (request.auth.token.email.lower() == email.lower() || isSuperAdmin());
+      }
     }
   }
 }
